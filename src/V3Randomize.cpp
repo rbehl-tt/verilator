@@ -1500,6 +1500,92 @@ class ConstraintExprVisitor final : public VNVisitor {
             return;
         }
 
+        // Handle array reduction methods with 'with' clause
+        if (nodep->method() == VCMethod::ARRAY_R_SUM
+            || nodep->method() == VCMethod::ARRAY_R_PRODUCT
+            || nodep->method() == VCMethod::ARRAY_R_AND || nodep->method() == VCMethod::ARRAY_R_OR
+            || nodep->method() == VCMethod::ARRAY_R_XOR) {
+            // Handle array reduction methods with 'with' clause
+            AstWith* const withp = VN_CAST(nodep->pinsp(), With);
+            UASSERT_OBJ(withp, nodep, "Array reduction in constraint should have 'with' clause");
+
+            const bool randArr = nodep->fromp()->user1();
+
+            // Create loop variable
+            AstVar* const loopVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, "__Vreduce", nodep->findSigned32DType()};
+            AstNodeExpr* const idxRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
+
+            // Create array iteration structure
+            AstSelLoopVars* const arrayLoopVars
+                = new AstSelLoopVars{fl, nodep->fromp()->cloneTreePure(false), loopVarp};
+
+            // Get array element selector
+            AstNodeExpr* const elemSelp = newSel(fl, nodep->fromp(), idxRefp);
+            elemSelp->user1(randArr);
+
+            // Clone the 'with' expression and substitute lambda args
+            AstNode* perElemExprp = withp->exprp()->cloneTreePure(false);
+
+            // Substitute lambda argument references with actual array element/index
+            perElemExprp->foreach([&](AstLambdaArgRef* refp) {
+                if (refp->index()) {
+                    refp->replaceWith(idxRefp->cloneTreePure(false));
+                } else {
+                    refp->replaceWith(elemSelp->cloneTreePure(false));
+                }
+                VL_DO_DANGLING(refp->deleteTree(), refp);
+            });
+
+            // Mark all non-constant nodes in the expression as depending on random variables
+            // Constants remain unmarked so they'll be formatted as SMT constants
+            perElemExprp->foreach([](AstNode* nodep) {
+                if (!VN_IS(nodep, Const)) nodep->user1(true);
+            });
+
+            // Determine SMT operation and identity element
+            std::string smtOp;
+            std::string identityVal;
+            if (nodep->method() == VCMethod::ARRAY_R_SUM) {
+                smtOp = "bvadd";
+                identityVal = "#b" + std::string(nodep->dtypep()->width(), '0');
+            } else if (nodep->method() == VCMethod::ARRAY_R_PRODUCT) {
+                smtOp = "bvmul";
+                // Identity = 1 in binary (guard against zero width to avoid out-of-bounds)
+                const size_t w = nodep->dtypep()->width();
+                identityVal = (w > 0) ? "#b" + std::string(w - 1, '0') + "1" : "#b0";
+            } else if (nodep->method() == VCMethod::ARRAY_R_AND) {
+                smtOp = "bvand";
+                // Identity = all 1s
+                identityVal = "#b" + std::string(nodep->dtypep()->width(), '1');
+            } else if (nodep->method() == VCMethod::ARRAY_R_OR) {
+                smtOp = "bvor";
+                identityVal = "#b" + std::string(nodep->dtypep()->width(), '0');
+            } else {  // ARRAY_R_XOR
+                smtOp = "bvxor";
+                identityVal = "#b" + std::string(nodep->dtypep()->width(), '0');
+            }
+
+            // Build the loop body that accumulates results
+            AstCStmt* const cstmtp = new AstCStmt{fl};
+            cstmtp->add("ret = \"(" + smtOp + " \" + ret + \" \";\n");
+            cstmtp->add("ret += ");
+            cstmtp->add(iterateSubtreeReturnEdits(perElemExprp));
+            cstmtp->add(";\n");
+            cstmtp->add("ret += \")\";\n");
+
+            // Create the lambda that generates SMT code
+            AstCExpr* const cexprp = new AstCExpr{fl};
+            cexprp->dtypeSetString();
+            cexprp->add("([&]{\nstd::string ret = \"" + identityVal + "\";\n");
+            cexprp->add(new AstBegin{fl, "", new AstForeach{fl, arrayLoopVars, cstmtp}, true});
+            cexprp->add("return ret;\n})()");
+
+            nodep->replaceWith(new AstSFormatF{fl, "%@", false, cexprp});
+            VL_DO_DANGLING(nodep->deleteTree(), nodep);
+            return;
+        }
+
         nodep->v3warn(CONSTRAINTIGN,
                       "Unsupported: randomizing this expression, treating as state");
         nodep->user1(false);

@@ -11,8 +11,6 @@ on:
       - 'dependabot/**'  # Avoid duplicates: only run the PR, not the push
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * 0'  # weekly
 
 permissions:
   contents: read

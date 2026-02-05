@@ -1528,19 +1528,29 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstNode* perElemExprp = withp->exprp()->cloneTreePure(false);
 
             // Substitute lambda argument references with actual array element/index
-            // Collect nodes to delete after iteration completes to avoid use-after-free
-            std::vector<AstLambdaArgRef*> toDelete;
-            perElemExprp->foreach([&](AstLambdaArgRef* refp) {
-                if (refp->index()) {
-                    refp->replaceWith(idxRefp->cloneTreePure(false));
+            // Handle case where perElemExprp itself is a LambdaArgRef
+            if (AstLambdaArgRef* const rootRefp = VN_CAST(perElemExprp, LambdaArgRef)) {
+                if (rootRefp->index()) {
+                    perElemExprp = idxRefp->cloneTreePure(false);
                 } else {
-                    refp->replaceWith(elemSelp->cloneTreePure(false));
+                    perElemExprp = elemSelp->cloneTreePure(false);
                 }
-                toDelete.push_back(refp);
-            });
-            // Safe to delete now that iteration is complete
-            for (AstLambdaArgRef* refp : toDelete) {
-                VL_DO_DANGLING(refp->deleteTree(), refp);
+                VL_DO_DANGLING(rootRefp->deleteTree(), rootRefp);
+            } else {
+                // Collect nodes to delete after iteration completes
+                std::vector<AstLambdaArgRef*> toDelete;
+                perElemExprp->foreach([&](AstLambdaArgRef* refp) {
+                    if (refp->index()) {
+                        refp->replaceWith(idxRefp->cloneTreePure(false));
+                    } else {
+                        refp->replaceWith(elemSelp->cloneTreePure(false));
+                    }
+                    toDelete.push_back(refp);
+                });
+                // Safe to delete now that iteration is complete
+                for (AstLambdaArgRef* refp : toDelete) {
+                    VL_DO_DANGLING(refp->deleteTree(), refp);
+                }
             }
             // Clean up the original template nodes (elemSelp contains idxRefp)
             VL_DO_DANGLING(elemSelp->deleteTree(), elemSelp);

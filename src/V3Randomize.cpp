@@ -2714,6 +2714,34 @@ class RandomizeVisitor final : public VNVisitor {
         clearp->dtypeSetVoid();
         return clearp->makeStmt();
     }
+    
+    // Generate solver calls for multiple solve groups
+    // Returns the expression to assign to the result variable (bit indicating success)
+    AstNodeExpr* generateSolveGroupCalls(FileLine* fl, AstVar* genp, 
+                                         const std::vector<std::vector<AstVar*>>& solveGroups) {
+        if (solveGroups.empty()) {
+            // No solve-before constraints, generate single call
+            AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
+            AstCExpr* const solverCallp = new AstCExpr{fl};
+            solverCallp->dtypeSetBit();
+            solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
+            solverCallp->add(".next(__Vm_rng)");
+            return solverCallp;
+        }
+        
+        // Multiple groups: generate sequential solve calls
+        // For now, just generate a comment and fall back to single solve
+        // TODO: Implement actual multi-group solving in next commit
+        UINFO(3, "Solve-before groups detected: " << solveGroups.size() << " groups\n");
+        
+        AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
+        AstCExpr* const solverCallp = new AstCExpr{fl};
+        solverCallp->dtypeSetBit();
+        solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
+        solverCallp->add(".next(__Vm_rng)");
+        return solverCallp;
+    }
+    
     AstVar* getVarFromRef(AstNodeExpr* const exprp) {
         if (AstMemberSel* const memberSelp = VN_CAST(exprp, MemberSel)) {
             return memberSelp->varp();
@@ -3114,13 +3142,22 @@ class RandomizeVisitor final : public VNVisitor {
             AstTaskRef* const setupTaskRefp = new AstTaskRef{fl, setupAllTaskp, nullptr};
             randomizep->addStmtsp(setupTaskRefp->makeStmt());
 
+            // Compute solve order groups from collected solve-before constraints
+            const SolveOrderGraph& solveGraph = m_classSolveGraphs[nodep];
+            std::vector<std::vector<AstVar*>> solveGroups;
+            if (!solveGraph.isEmpty()) {
+                solveGroups = solveGraph.computeSolveGroups(fl);
+                if (!solveGroups.empty()) {
+                    UINFO(4, "Class " << nodep->name() << " has " << solveGroups.size() 
+                          << " solve groups\n");
+                }
+            }
+
             AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
 
-            AstCExpr* const solverCallp = new AstCExpr{fl};
-            solverCallp->dtypeSetBit();
-            solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
-            solverCallp->add(".next(__Vm_rng)");
-            beginValp = solverCallp;
+            // Generate solver call(s) based on solve groups
+            beginValp = generateSolveGroupCalls(fl, genp, solveGroups);
+            
             if (randModeVarp) {
                 AstNodeModule* const randModeClassp = VN_AS(randModeVarp->user2p(), Class);
                 AstNodeFTask* const newp

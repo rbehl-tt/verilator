@@ -2729,10 +2729,29 @@ class RandomizeVisitor final : public VNVisitor {
             return solverCallp;
         }
         
-        // Multiple groups: generate sequential solve calls
-        // For now, just generate a comment and fall back to single solve
-        // TODO: Implement actual multi-group solving in next commit
-        UINFO(3, "Solve-before groups detected: " << solveGroups.size() << " groups\n");
+        // Multiple groups detected: log for debugging
+        UINFO(3, "Multi-group solve detected: " << solveGroups.size() << " groups\n");
+        for (size_t i = 0; i < solveGroups.size(); ++i) {
+            UINFO(3, "  Group " << i << ": ");
+            for (AstVar* varp : solveGroups[i]) {
+                UINFO(3, varp->name() << " ");
+            }
+            UINFO(3, "\n");
+        }
+        
+        // TODO: Implement actual multi-group solving
+        // For each group N:
+        //   1. Clear vars from previous iterations  
+        //   2. write_var only for variables in group N
+        //   3. hard() constraints (vars from group 0..N-1 become constants)
+        //   4. next() to solve
+        //   5. Extract values from group N variables
+        //
+        // For now, fall back to single solve (treats all variables together)
+        // This maintains correctness but doesn't enforce solve order
+        
+        UINFO(1, "Warning: solve-before constraints collected but multi-group solving "
+                 "not yet implemented. Variables will be solved together.\n");
         
         AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
         AstCExpr* const solverCallp = new AstCExpr{fl};

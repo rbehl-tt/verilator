@@ -118,6 +118,64 @@ public:
         }
         return result;
     }
+    
+    // Compute solve order groups using topological sort
+    // Returns groups of variables that can be solved simultaneously
+    // Variables in group N must be solved before variables in group N+1
+    std::vector<std::vector<AstVar*>> computeSolveGroups(FileLine* fl) const {
+        std::vector<std::vector<AstVar*>> groups;
+        if (isEmpty()) return groups;
+        
+        // Get all constrained variables
+        std::set<AstVar*> allVars = getAllVars();
+        std::map<AstVar*, int> inDegree;  // Count of unsatisfied dependencies
+        
+        // Initialize in-degrees
+        for (AstVar* varp : allVars) {
+            inDegree[varp] = getPredecessors(varp).size();
+        }
+        
+        // Topological sort using Kahn's algorithm
+        std::set<AstVar*> remaining = allVars;
+        while (!remaining.empty()) {
+            // Find all variables with no unsatisfied dependencies
+            std::vector<AstVar*> currentGroup;
+            for (AstVar* varp : remaining) {
+                if (inDegree[varp] == 0) {
+                    currentGroup.push_back(varp);
+                }
+            }
+            
+            // Check for cycles
+            if (currentGroup.empty()) {
+                // There's a cycle in the dependency graph
+                // Find one variable involved in the cycle for error reporting
+                AstVar* cycleVar = *remaining.begin();
+                for (const auto& info : m_constraints) {
+                    if (info.lhsp == cycleVar || info.rhsp == cycleVar) {
+                        info.nodep->v3error("Cyclic solve-before constraint detected involving variable '"
+                                           << cycleVar->name() << "'");
+                        break;
+                    }
+                }
+                // Return what we have so far to avoid crash
+                return groups;
+            }
+            
+            groups.push_back(currentGroup);
+            
+            // Remove current group from remaining and update in-degrees
+            for (AstVar* varp : currentGroup) {
+                remaining.erase(varp);
+                // Decrease in-degree for successors
+                for (AstVar* succ : getSuccessors(varp)) {
+                    inDegree[succ]--;
+                }
+            }
+        }
+        
+        return groups;
+    }
 };
 
 // ######################################################################

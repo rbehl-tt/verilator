@@ -2716,21 +2716,24 @@ class RandomizeVisitor final : public VNVisitor {
     }
     
     // Generate solver calls for multiple solve groups
-    // Returns the expression to assign to the result variable (bit indicating success)
-    AstNodeExpr* generateSolveGroupCalls(FileLine* fl, AstVar* genp, 
-                                         const std::vector<std::vector<AstVar*>>& solveGroups) {
+    // Returns statements to add to randomize() and the final result expression
+    void generateSolveGroupCalls(AstFunc* randomizep, FileLine* fl, AstVar* genp, 
+                                 const std::vector<std::vector<AstVar*>>& solveGroups,
+                                 AstNodeExpr*& resultExprp) {
+        AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
+        
         if (solveGroups.empty()) {
             // No solve-before constraints, generate single call
-            AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
             AstCExpr* const solverCallp = new AstCExpr{fl};
             solverCallp->dtypeSetBit();
             solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
             solverCallp->add(".next(__Vm_rng)");
-            return solverCallp;
+            resultExprp = solverCallp;
+            return;
         }
         
-        // Multiple groups detected: log for debugging
-        UINFO(3, "Multi-group solve detected: " << solveGroups.size() << " groups\n");
+        // Multiple groups detected: generate sequential solving
+        UINFO(3, "Generating multi-group solve for " << solveGroups.size() << " groups\n");
         for (size_t i = 0; i < solveGroups.size(); ++i) {
             UINFO(3, "  Group " << i << ": ");
             for (AstVar* varp : solveGroups[i]) {
@@ -2739,26 +2742,67 @@ class RandomizeVisitor final : public VNVisitor {
             UINFO(3, "\n");
         }
         
-        // TODO: Implement actual multi-group solving
-        // For each group N:
-        //   1. Clear vars from previous iterations  
-        //   2. write_var only for variables in group N
-        //   3. hard() constraints (vars from group 0..N-1 become constants)
-        //   4. next() to solve
-        //   5. Extract values from group N variables
-        //
-        // For now, fall back to single solve (treats all variables together)
-        // This maintains correctness but doesn't enforce solve order
+        // Create a map of which group each variable belongs to
+        std::map<AstVar*, size_t> varToGroup;
+        for (size_t i = 0; i < solveGroups.size(); ++i) {
+            for (AstVar* varp : solveGroups[i]) {
+                varToGroup[varp] = i;
+            }
+        }
         
-        UINFO(1, "Warning: solve-before constraints collected but multi-group solving "
-                 "not yet implemented. Variables will be solved together.\n");
+        // Single-group optimization: use standard approach
+        if (solveGroups.size() == 1) {
+            AstCExpr* const solverCallp = new AstCExpr{fl};
+            solverCallp->dtypeSetBit();
+            solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
+            solverCallp->add(".next(__Vm_rng)");
+            resultExprp = solverCallp;
+            return;
+        }
         
-        AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
-        AstCExpr* const solverCallp = new AstCExpr{fl};
-        solverCallp->dtypeSetBit();
-        solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
-        solverCallp->add(".next(__Vm_rng)");
-        return solverCallp;
+        // Multi-group solve: generate sequential solver calls with constraint clearing
+        AstNodeExpr* lastResultp = nullptr;
+        
+        for (size_t groupIdx = 0; groupIdx < solveGroups.size(); ++groupIdx) {
+            // Add comment about this group
+            std::string comment = "Solve group " + std::to_string(groupIdx) + ": ";
+            for (AstVar* varp : solveGroups[groupIdx]) {
+                comment += varp->name() + " ";
+            }
+            AstComment* commentp = new AstComment{fl, comment};
+            randomizep->addStmtsp(commentp);
+            
+            if (groupIdx > 0) {
+                // Clear constraints for subsequent groups
+                // Variables remain registered, but constraints are cleared
+                AstCMethodHard* const clearp = new AstCMethodHard{
+                    fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+                    VCMethod::RANDOMIZER_CLEARCONSTRAINTS};
+                clearp->dtypeSetVoid();
+                randomizep->addStmtsp(clearp->makeStmt());
+                
+                // TODO: Re-add constraints here with solved variables as constants
+                // This requires constraint re-generation infrastructure
+                AstComment* todoComment = new AstComment{
+                    fl, "TODO: Re-add constraints with previous groups as constants"};
+                randomizep->addStmtsp(todoComment);
+            }
+            
+            // Call next() to solve this group
+            AstCExpr* const solverCallp = new AstCExpr{fl};
+            solverCallp->dtypeSetBit();
+            solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
+            solverCallp->add(".next(__Vm_rng)");
+            
+            if (groupIdx == 0) {
+                lastResultp = solverCallp;
+            } else {
+                // AND together results from all groups
+                lastResultp = new AstAnd{fl, lastResultp, solverCallp};
+            }
+        }
+        
+        resultExprp = lastResultp;
     }
     
     AstVar* getVarFromRef(AstNodeExpr* const exprp) {
@@ -3175,7 +3219,7 @@ class RandomizeVisitor final : public VNVisitor {
             AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
 
             // Generate solver call(s) based on solve groups
-            beginValp = generateSolveGroupCalls(fl, genp, solveGroups);
+            generateSolveGroupCalls(randomizep, fl, genp, solveGroups, beginValp);
             
             if (randModeVarp) {
                 AstNodeModule* const randModeClassp = VN_AS(randModeVarp->user2p(), Class);

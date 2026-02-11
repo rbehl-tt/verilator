@@ -75,7 +75,9 @@ struct SolveBeforeInfo final {
     AstConstraintBefore* nodep;  // Original AST node for error reporting
 
     SolveBeforeInfo(AstVar* lhs, AstVar* rhs, AstConstraintBefore* node)
-        : lhsp{lhs}, rhsp{rhs}, nodep{node} {}
+        : lhsp{lhs}
+        , rhsp{rhs}
+        , nodep{node} {}
 };
 
 class SolveOrderGraph final {
@@ -131,9 +133,7 @@ public:
         std::map<AstVar*, int> inDegree;  // Count of unsatisfied dependencies
 
         // Initialize in-degrees
-        for (AstVar* varp : allVars) {
-            inDegree[varp] = getPredecessors(varp).size();
-        }
+        for (AstVar* varp : allVars) { inDegree[varp] = getPredecessors(varp).size(); }
 
         // Topological sort using Kahn's algorithm
         std::set<AstVar*> remaining = allVars;
@@ -141,9 +141,7 @@ public:
             // Find all variables with no unsatisfied dependencies
             std::vector<AstVar*> currentGroup;
             for (AstVar* varp : remaining) {
-                if (inDegree[varp] == 0) {
-                    currentGroup.push_back(varp);
-                }
+                if (inDegree[varp] == 0) { currentGroup.push_back(varp); }
             }
 
             // Check for cycles
@@ -153,8 +151,9 @@ public:
                 AstVar* cycleVar = *remaining.begin();
                 for (const auto& info : m_constraints) {
                     if (info.lhsp == cycleVar || info.rhsp == cycleVar) {
-                        info.nodep->v3error("Cyclic solve-before constraint detected involving variable '"
-                                           << cycleVar->name() << "'");
+                        info.nodep->v3error(
+                            "Cyclic solve-before constraint detected involving variable '"
+                            << cycleVar->name() << "'");
                         break;
                     }
                 }
@@ -168,9 +167,7 @@ public:
             for (AstVar* varp : currentGroup) {
                 remaining.erase(varp);
                 // Decrease in-degree for successors
-                for (AstVar* succ : getSuccessors(varp)) {
-                    inDegree[succ]--;
-                }
+                for (AstVar* succ : getSuccessors(varp)) { inDegree[succ]--; }
             }
         }
 
@@ -963,7 +960,9 @@ class ConstraintExprVisitor final : public VNVisitor {
                     argsp = AstNode::addNext(argsp, thsp);
                     thsp = nullptr;
                     break;
-                default: nodep->v3fatalSrc("Unknown emitSMT format code: %" << smtExpr[idx]); break;
+                default:
+                    nodep->v3fatalSrc("Unknown emitSMT format code: %" << smtExpr[idx]);
+                    break;
                 }
             }
         }
@@ -1667,8 +1666,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                 lhsVars.push_back(varrefp->varp());
             } else {
                 // Complex expression (e.g., a[i], obj.member) - not supported in Phase 1
-                nodep->v3warn(CONSTRAINTIGN,
-                             "Unsupported: solve-before with complex expressions (only simple variables supported currently)");
+                nodep->v3warn(CONSTRAINTIGN, "Unsupported: solve-before with complex expressions "
+                                             "(only simple variables supported currently)");
                 VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
                 return;
             }
@@ -1681,8 +1680,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                 rhsVars.push_back(varrefp->varp());
             } else {
                 // Complex expression - not supported in Phase 1
-                nodep->v3warn(CONSTRAINTIGN,
-                             "Unsupported: solve-before with complex expressions (only simple variables supported currently)");
+                nodep->v3warn(CONSTRAINTIGN, "Unsupported: solve-before with complex expressions "
+                                             "(only simple variables supported currently)");
                 VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
                 return;
             }
@@ -1691,9 +1690,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Add edges to the solve order graph
         if (m_solveGraphp) {
             for (AstVar* lhsVar : lhsVars) {
-                for (AstVar* rhsVar : rhsVars) {
-                    m_solveGraphp->addEdge(lhsVar, rhsVar, nodep);
-                }
+                for (AstVar* rhsVar : rhsVars) { m_solveGraphp->addEdge(lhsVar, rhsVar, nodep); }
             }
         }
 
@@ -2289,9 +2286,7 @@ class RandomizeVisitor final : public VNVisitor {
     void collectReferencedRandVars(AstNode* nodep, std::set<AstVar*>& vars) {
         if (!nodep) return;
         if (AstVarRef* const varrefp = VN_CAST(nodep, VarRef)) {
-            if (varrefp->varp() && varrefp->varp()->isRand()) {
-                vars.insert(varrefp->varp());
-            }
+            if (varrefp->varp() && varrefp->varp()->isRand()) { vars.insert(varrefp->varp()); }
         }
         // Recurse into all operands
         if (nodep->op1p()) collectReferencedRandVars(nodep->op1p(), vars);
@@ -2320,17 +2315,20 @@ class RandomizeVisitor final : public VNVisitor {
 
         // Generate write_var() calls for variables in this group (non-const variables)
         for (AstVar* varp : groupVars) {
-            // Generate: this->__PVT__constraint.write_var(this->__PVT__<var>, <width>, "<name>", <rhs>);
+            // Generate: this->__PVT__constraint.write_var(this->__PVT__<var>, <width>, "<name>",
+            // <rhs>);
             FileLine* fl = varp->fileline();
             AstVarRef* varrefp = new AstVarRef{fl, classp, varp, VAccess::WRITE};
-            AstCMethodHard* writeVarp = new AstCMethodHard{
-                fl, new AstVarRef{fl, classp, genp, VAccess::READWRITE},
-                VCMethod::RANDOMIZER_WRITE_VAR, varrefp};
+            AstCMethodHard* writeVarp
+                = new AstCMethodHard{fl, new AstVarRef{fl, classp, genp, VAccess::READWRITE},
+                                     VCMethod::RANDOMIZER_WRITE_VAR, varrefp};
             writeVarp->dtypeSetVoid();
             // Add width parameter (bits)
-            writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(varp->width())});
+            writeVarp->addPinsp(
+                new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(varp->width())});
             // Add name parameter as C expression with string literal
-            AstNodeExpr* varnamep = new AstCExpr{fl, AstCExpr::Pure{}, "\"" + varp->name() + "\"", varp->width()};
+            AstNodeExpr* varnamep
+                = new AstCExpr{fl, AstCExpr::Pure{}, "\"" + varp->name() + "\"", varp->width()};
             varnamep->dtypep(varp->dtypep());
             writeVarp->addPinsp(varnamep);
             // Add dimension parameter (0 for simple variables)
@@ -2358,7 +2356,8 @@ class RandomizeVisitor final : public VNVisitor {
                 bool allVarsKnown = true;
                 for (AstVar* refVar : referencedVars) {
                     if (knownVars.find(refVar) == knownVars.end()) {
-                        // This variable is not yet solved and not in current group - skip constraint
+                        // This variable is not yet solved and not in current group - skip
+                        // constraint
                         allVarsKnown = false;
                         break;
                     }
@@ -2378,9 +2377,8 @@ class RandomizeVisitor final : public VNVisitor {
 
                 // NOW visit the cloned item - it's properly linked now
                 // Note: we visit clonedItemp (the actual constraint), not the wrapper
-                ConstraintExprVisitor{classp,      m_memberMap,  clonedItemp, nullptr,
-                                      genp,        randModeVarp, m_writtenVars, nullptr,
-                                      &constVars};
+                ConstraintExprVisitor{classp,       m_memberMap,   clonedItemp, nullptr,   genp,
+                                      randModeVarp, m_writtenVars, nullptr,     &constVars};
             }
         }
 
@@ -2918,18 +2916,14 @@ class RandomizeVisitor final : public VNVisitor {
         UINFO(3, "Generating multi-group solve for " << solveGroups.size() << " groups\n");
         for (size_t i = 0; i < solveGroups.size(); ++i) {
             UINFO(3, "  Group " << i << ": ");
-            for (AstVar* varp : solveGroups[i]) {
-                UINFO(3, varp->name() << " ");
-            }
+            for (AstVar* varp : solveGroups[i]) { UINFO(3, varp->name() << " "); }
             UINFO(3, "\n");
         }
 
         // Create a map of which group each variable belongs to
         std::map<AstVar*, size_t> varToGroup;
         for (size_t i = 0; i < solveGroups.size(); ++i) {
-            for (AstVar* varp : solveGroups[i]) {
-                varToGroup[varp] = i;
-            }
+            for (AstVar* varp : solveGroups[i]) { varToGroup[varp] = i; }
         }
 
         // Single-group optimization: use standard approach
@@ -2949,22 +2943,21 @@ class RandomizeVisitor final : public VNVisitor {
         for (size_t groupIdx = 0; groupIdx < solveGroups.size(); ++groupIdx) {
             // Add comment about this group
             std::string comment = "Solve group " + std::to_string(groupIdx) + ": ";
-            for (AstVar* varp : solveGroups[groupIdx]) {
-                comment += varp->name() + " ";
-            }
+            for (AstVar* varp : solveGroups[groupIdx]) { comment += varp->name() + " "; }
             AstComment* commentp = new AstComment{fl, comment};
             randomizep->addStmtsp(commentp);
 
             // For ALL groups (including group 0), we need to clear and re-register
             // to ensure only the variables in this group are active
-            AstCMethodHard* const clearp = new AstCMethodHard{
-                fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
-                VCMethod::RANDOMIZER_CLEARALL};
+            AstCMethodHard* const clearp
+                = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+                                     VCMethod::RANDOMIZER_CLEARALL};
             clearp->dtypeSetVoid();
             randomizep->addStmtsp(clearp->makeStmt());
 
             // Get the variables in this group
-            std::set<AstVar*> groupVars(solveGroups[groupIdx].begin(), solveGroups[groupIdx].end());
+            std::set<AstVar*> groupVars(solveGroups[groupIdx].begin(),
+                                        solveGroups[groupIdx].end());
 
             AstTask* const setupTaskp = getCreateConstraintSetupFuncForGroup(
                 classp, groupIdx, genp, randModeVarp, solvedVars, groupVars);
@@ -2982,8 +2975,8 @@ class RandomizeVisitor final : public VNVisitor {
 
             // Create a temporary variable to store this group's result
             const std::string tmpName = "__Vgroup" + std::to_string(groupIdx) + "_result";
-            AstVar* const tmpVarp = new AstVar{fl, VVarType::BLOCKTEMP, tmpName,
-                                              randomizep->findBitDType()};
+            AstVar* const tmpVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, tmpName, randomizep->findBitDType()};
             tmpVarp->funcLocal(true);
             randomizep->addStmtsp(tmpVarp);
             AstVarRef* const tmpRefp = new AstVarRef{fl, tmpVarp, VAccess::WRITE};
@@ -3387,8 +3380,8 @@ class RandomizeVisitor final : public VNVisitor {
                 // Get or create solve graph for this class
                 SolveOrderGraph& solveGraph = m_classSolveGraphs[nodep];
 
-                ConstraintExprVisitor{classp,      m_memberMap,  constrp->itemsp(), nullptr,
-                                      genp,        randModeVarp, m_writtenVars,    &solveGraph};
+                ConstraintExprVisitor{classp, m_memberMap,  constrp->itemsp(), nullptr,
+                                      genp,   randModeVarp, m_writtenVars,     &solveGraph};
                 if (constrp->itemsp()) {
                     taskp->addStmtsp(wrapIfConstraintMode(
                         nodep, constrp, constrp->itemsp()->unlinkFrBackWithNext()));
@@ -3429,7 +3422,7 @@ class RandomizeVisitor final : public VNVisitor {
                 solveGroups = solveGraph.computeSolveGroups(fl);
                 if (!solveGroups.empty()) {
                     UINFO(4, "Class " << nodep->name() << " has " << solveGroups.size()
-                          << " solve groups\n");
+                                      << " solve groups\n");
                 }
             }
 

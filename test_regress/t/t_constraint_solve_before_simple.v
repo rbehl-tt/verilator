@@ -5,13 +5,13 @@
 // SPDX-License-Identifier: CC0-1.0
 
 class Packet;
-  rand int x;
-  rand int y;
+  rand byte x;
+  rand byte y;
   
   // Simple solve-before: x should be solved before y
   constraint c_order {
     solve x before y;
-    x < y;
+    x > y;
     x >= 0;
     x < 100;
   }
@@ -28,7 +28,7 @@ module t;
     for (int i = 0; i < 10; i++) begin
       v = p.randomize();
       if (v != 1) $stop;
-      if (p.x >= p.y) $stop;
+      if (p.x <= p.y) $stop;
       $display("x=%0d y=%0d", p.x, p.y);
     end
     

@@ -14,9 +14,8 @@ test.scenarios('simulator')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-# Currently expected to fail because multi-group solving not yet implemented
-# Once implemented, this should pass
 test.compile()
 
-test.execute(expect_filename=test.golden_filename, 
-             fails=True)  # Expected to fail for now
+test.execute()
+
+test.passes()

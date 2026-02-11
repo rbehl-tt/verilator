@@ -118,23 +118,23 @@ public:
         }
         return result;
     }
-    
+
     // Compute solve order groups using topological sort
     // Returns groups of variables that can be solved simultaneously
     // Variables in group N must be solved before variables in group N+1
     std::vector<std::vector<AstVar*>> computeSolveGroups(FileLine* fl) const {
         std::vector<std::vector<AstVar*>> groups;
         if (isEmpty()) return groups;
-        
+
         // Get all constrained variables
         std::set<AstVar*> allVars = getAllVars();
         std::map<AstVar*, int> inDegree;  // Count of unsatisfied dependencies
-        
+
         // Initialize in-degrees
         for (AstVar* varp : allVars) {
             inDegree[varp] = getPredecessors(varp).size();
         }
-        
+
         // Topological sort using Kahn's algorithm
         std::set<AstVar*> remaining = allVars;
         while (!remaining.empty()) {
@@ -145,7 +145,7 @@ public:
                     currentGroup.push_back(varp);
                 }
             }
-            
+
             // Check for cycles
             if (currentGroup.empty()) {
                 // There's a cycle in the dependency graph
@@ -161,9 +161,9 @@ public:
                 // Return what we have so far to avoid crash
                 return groups;
             }
-            
+
             groups.push_back(currentGroup);
-            
+
             // Remove current group from remaining and update in-degrees
             for (AstVar* varp : currentGroup) {
                 remaining.erase(varp);
@@ -173,7 +173,7 @@ public:
                 }
             }
         }
-        
+
         return groups;
     }
 };
@@ -839,6 +839,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::set<std::string>& m_writtenVars;  // Track which variable paths have write_var generated
                                            // (shared across all constraints)
     SolveOrderGraph* m_solveGraphp;  // Optional: collect solve-before dependencies
+    const std::set<AstVar*>* m_constVarsp = nullptr;  // Variables treated as constants
 
     // Build full path for a MemberSel chain (e.g., "obj.l2.l3.l4")
     std::string buildMemberPath(const AstMemberSel* const memberSelp) {
@@ -885,37 +886,93 @@ class ConstraintExprVisitor final : public VNVisitor {
             thsp = VN_AS(iterateSubtreeReturnEdits(thsp->backp() ? thsp->unlinkFrBack() : thsp),
                          NodeExpr);
 
+        // Process the SMT expression template, detecting const variables
         AstNodeExpr* argsp = nullptr;
-        for (string::iterator pos = smtExpr.begin(); pos != smtExpr.end(); ++pos) {
-            if (pos[0] == '%') {
-                ++pos;
-                switch (pos[0]) {
+        for (size_t idx = 0; idx < smtExpr.length(); ++idx) {
+            if (smtExpr[idx] == '%') {
+                ++idx;
+                if (idx >= smtExpr.length()) break;
+                switch (smtExpr[idx]) {
                 case '%': break;
                 case 'l':
-                    pos[0] = '@';
                     UASSERT_OBJ(lhsp, nodep, "emitSMT() references undef node");
+                    // Check if lhsp is a const variable that should be formatted inline
+                    if (m_constVarsp && VN_IS(lhsp, VarRef)) {
+                        AstVarRef* varrefp = VN_AS(lhsp, VarRef);
+                        if (m_constVarsp->count(varrefp->varp())) {
+                            // Use %x format for hex value or %b for non-aligned widths
+                            if (varrefp->varp()->width() & 3) {
+                                smtExpr.replace(idx - 1, 2, "#b%b");
+                                idx += 2;  // Adjust index for the inserted characters
+                            } else {
+                                smtExpr.replace(idx - 1, 2, "#x%x");
+                                idx += 2;  // Adjust index for the inserted characters
+                            }
+                            argsp = AstNode::addNext(argsp, lhsp);
+                            lhsp = nullptr;
+                            break;
+                        }
+                    }
+                    smtExpr[idx] = '@';
                     argsp = AstNode::addNext(argsp, lhsp);
                     lhsp = nullptr;
                     break;
                 case 'r':
-                    pos[0] = '@';
                     UASSERT_OBJ(rhsp, nodep, "emitSMT() references undef node");
+                    // Check if rhsp is a const variable that should be formatted inline
+                    if (m_constVarsp && VN_IS(rhsp, VarRef)) {
+                        AstVarRef* varrefp = VN_AS(rhsp, VarRef);
+                        if (m_constVarsp->count(varrefp->varp())) {
+                            // Use %x format for hex value or %b for non-aligned widths
+                            if (varrefp->varp()->width() & 3) {
+                                smtExpr.replace(idx - 1, 2, "#b%b");
+                                idx += 2;  // Adjust index for the inserted characters
+                            } else {
+                                smtExpr.replace(idx - 1, 2, "#x%x");
+                                idx += 2;  // Adjust index for the inserted characters
+                            }
+                            argsp = AstNode::addNext(argsp, rhsp);
+                            rhsp = nullptr;
+                            break;
+                        }
+                    }
+                    smtExpr[idx] = '@';
                     argsp = AstNode::addNext(argsp, rhsp);
                     rhsp = nullptr;
                     break;
                 case 't':
-                    pos[0] = '@';
                     UASSERT_OBJ(thsp, nodep, "emitSMT() references undef node");
+                    // Check if thsp is a const variable that should be formatted inline
+                    if (m_constVarsp && VN_IS(thsp, VarRef)) {
+                        AstVarRef* varrefp = VN_AS(thsp, VarRef);
+                        if (m_constVarsp->count(varrefp->varp())) {
+                            // Use %x format for hex value or %b for non-aligned widths
+                            if (varrefp->varp()->width() & 3) {
+                                smtExpr.replace(idx - 1, 2, "#b%b");
+                                idx += 2;  // Adjust index for the inserted characters
+                            } else {
+                                smtExpr.replace(idx - 1, 2, "#x%x");
+                                idx += 2;  // Adjust index for the inserted characters
+                            }
+                            argsp = AstNode::addNext(argsp, thsp);
+                            thsp = nullptr;
+                            break;
+                        }
+                    }
+                    smtExpr[idx] = '@';
                     argsp = AstNode::addNext(argsp, thsp);
                     thsp = nullptr;
                     break;
-                default: nodep->v3fatalSrc("Unknown emitSMT format code: %" << pos[0]); break;
+                default: nodep->v3fatalSrc("Unknown emitSMT format code: %" << smtExpr[idx]); break;
                 }
             }
         }
         UASSERT_OBJ(!lhsp, nodep, "Missing emitSMT %l for " << lhsp);
         UASSERT_OBJ(!rhsp, nodep, "Missing emitSMT %r for " << rhsp);
         UASSERT_OBJ(!thsp, nodep, "Missing emitSMT %t for " << thsp);
+        emitSMT(nodep, smtExpr, argsp);
+    }
+    void emitSMT(AstNode* nodep, const string& smtExpr, AstNodeExpr* argsp) {
         AstSFormatF* const newp = new AstSFormatF{nodep->fileline(), smtExpr, false, argsp};
         if (m_structSel && newp->name() == "(select %@ %@)") {
             newp->name("%@.%@");
@@ -998,6 +1055,14 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (membersel) varp = membersel->varp();
         AstNodeModule* const classOrPackagep = nodep->classOrPackagep();
         const RandomizeMode randMode = {.asInt = varp->user1()};
+
+        // If this variable is treated as a constant (already solved), skip write_var
+        // It will be formatted as a constant in the SMT expressions by emitSMT
+        if (m_constVarsp && m_constVarsp->count(varp)) {
+            // Don't call write_var() - we don't want to re-register it as a variable
+            // The emitSMT calls will handle formatting it as a constant
+            return;
+        }
         if (!randMode.usesMode && editFormat(nodep)) return;
 
         VNRelinker relinker;
@@ -1633,7 +1698,13 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
 
         // Remove the constraint node from the AST (it's been processed)
-        VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+        // Only unlink if it's actually linked (not if we're processing a cloned template)
+        if (nodep->backp()) {
+            VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+        } else {
+            // Cloned template - just mark for deletion without unlinking
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        }
     }
     void visit(AstConstraintUnique* nodep) override {
         if (!m_classp) {
@@ -1839,14 +1910,16 @@ public:
     explicit ConstraintExprVisitor(AstClass* classp, VMemberMap& memberMap, AstNode* nodep,
                                    AstNodeFTask* inlineInitTaskp, AstVar* genp,
                                    AstVar* randModeVarp, std::set<std::string>& writtenVars,
-                                   SolveOrderGraph* solveGraphp = nullptr)
+                                   SolveOrderGraph* solveGraphp = nullptr,
+                                   const std::set<AstVar*>* constVarsp = nullptr)
         : m_classp{classp}
         , m_inlineInitTaskp{inlineInitTaskp}
         , m_genp{genp}
         , m_randModeVarp{randModeVarp}
         , m_memberMap{memberMap}
         , m_writtenVars{writtenVars}
-        , m_solveGraphp{solveGraphp} {
+        , m_solveGraphp{solveGraphp}
+        , m_constVarsp{constVarsp} {
         iterateAndNextNull(nodep);
     }
 };
@@ -2136,6 +2209,12 @@ class RandomizeVisitor final : public VNVisitor {
     std::map<AstClass*, AstVar*>
         m_staticConstraintModeVars;  // Static constraint mode vars per class
     std::map<AstClass*, SolveOrderGraph> m_classSolveGraphs;  // Solve-before info per class
+    struct ConstraintTemplate final {
+        AstConstraint* constrp;
+        AstNode* itemsp;
+    };
+    std::map<AstClass*, std::vector<ConstraintTemplate>> m_constraintTemplates;
+    std::map<std::pair<AstClass*, size_t>, AstTask*> m_groupConstraintTasks;
 
     // METHODS
     // Check if two nodes are semantically equivalent (not pointer equality):
@@ -2205,6 +2284,108 @@ class RandomizeVisitor final : public VNVisitor {
         classp->addMembersp(setupAllTaskp);
         m_memberMap.insert(classp, setupAllTaskp);
         return setupAllTaskp;
+    }
+    // Helper: collect all rand variables referenced in a constraint expression
+    void collectReferencedRandVars(AstNode* nodep, std::set<AstVar*>& vars) {
+        if (!nodep) return;
+        if (AstVarRef* const varrefp = VN_CAST(nodep, VarRef)) {
+            if (varrefp->varp() && varrefp->varp()->isRand()) {
+                vars.insert(varrefp->varp());
+            }
+        }
+        // Recurse into all operands
+        if (nodep->op1p()) collectReferencedRandVars(nodep->op1p(), vars);
+        if (nodep->op2p()) collectReferencedRandVars(nodep->op2p(), vars);
+        if (nodep->op3p()) collectReferencedRandVars(nodep->op3p(), vars);
+        if (nodep->op4p()) collectReferencedRandVars(nodep->op4p(), vars);
+    }
+
+    AstTask* getCreateConstraintSetupFuncForGroup(AstClass* classp, size_t groupIdx, AstVar* genp,
+                                                  AstVar* randModeVarp,
+                                                  const std::set<AstVar*>& constVars,
+                                                  const std::set<AstVar*>& groupVars) {
+        const std::pair<AstClass*, size_t> key{classp, groupIdx};
+        const auto it = m_groupConstraintTasks.find(key);
+        if (it != m_groupConstraintTasks.end()) return it->second;
+
+        const auto templIt = m_constraintTemplates.find(classp);
+        if (templIt == m_constraintTemplates.end() || templIt->second.empty()) return nullptr;
+
+        const std::string name = "__Vsetup_constraints_group" + std::to_string(groupIdx);
+        AstTask* const taskp = new AstTask{classp->fileline(), name, nullptr};
+        taskp->classMethod(true);
+        taskp->isVirtual(true);
+        classp->addMembersp(taskp);
+        m_memberMap.insert(classp, taskp);
+
+        // Generate write_var() calls for variables in this group (non-const variables)
+        for (AstVar* varp : groupVars) {
+            // Generate: this->__PVT__constraint.write_var(this->__PVT__<var>, <width>, "<name>", <rhs>);
+            FileLine* fl = varp->fileline();
+            AstVarRef* varrefp = new AstVarRef{fl, classp, varp, VAccess::WRITE};
+            AstCMethodHard* writeVarp = new AstCMethodHard{
+                fl, new AstVarRef{fl, classp, genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_WRITE_VAR, varrefp};
+            writeVarp->dtypeSetVoid();
+            // Add width parameter (bits)
+            writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(varp->width())});
+            // Add name parameter as C expression with string literal
+            AstNodeExpr* varnamep = new AstCExpr{fl, AstCExpr::Pure{}, "\"" + varp->name() + "\"", varp->width()};
+            varnamep->dtypep(varp->dtypep());
+            writeVarp->addPinsp(varnamep);
+            // Add dimension parameter (0 for simple variables)
+            writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0});
+            taskp->addStmtsp(writeVarp->makeStmt());
+        }
+
+        // Combine groupVars and constVars to get all variables that are "known" in this group
+        std::set<AstVar*> knownVars = constVars;
+        knownVars.insert(groupVars.begin(), groupVars.end());
+
+        for (const ConstraintTemplate& templ : templIt->second) {
+            // The template itemsp is a linked list of all constraints in the block
+            // We need to check each one individually
+            for (AstNode* itemp = templ.itemsp; itemp; itemp = itemp->nextp()) {
+                // Clone only this single item, not the chain (cloneTree clones nextp too)
+                AstNode* const clonedItemp = itemp->cloneTree(false);
+                if (!clonedItemp) continue;
+
+                // Check if this constraint only references variables in knownVars
+                // Variables not yet solved should cause the constraint to be skipped
+                std::set<AstVar*> referencedVars;
+                collectReferencedRandVars(clonedItemp, referencedVars);
+
+                bool allVarsKnown = true;
+                for (AstVar* refVar : referencedVars) {
+                    if (knownVars.find(refVar) == knownVars.end()) {
+                        // This variable is not yet solved and not in current group - skip constraint
+                        allVarsKnown = false;
+                        break;
+                    }
+                }
+
+                // Only include this constraint if all referenced variables are known
+                if (!allVarsKnown) {
+                    VL_DO_DANGLING(clonedItemp->deleteTree(), clonedItemp);
+                    continue;
+                }
+
+                // Wrap in constraint mode check first
+                AstNode* wrappedStmtsp = wrapIfConstraintMode(classp, templ.constrp, clonedItemp);
+
+                // Add the wrapped statement to the task so it has proper back pointers
+                taskp->addStmtsp(wrappedStmtsp);
+
+                // NOW visit the cloned item - it's properly linked now
+                // Note: we visit clonedItemp (the actual constraint), not the wrapper
+                ConstraintExprVisitor{classp,      m_memberMap,  clonedItemp, nullptr,
+                                      genp,        randModeVarp, m_writtenVars, nullptr,
+                                      &constVars};
+            }
+        }
+
+        m_groupConstraintTasks.emplace(key, taskp);
+        return taskp;
     }
     AstTask* getCreateAggrResizeTask(AstClass* const classp) {
         static const char* const name = "__Vresize_constrained_arrays";
@@ -2714,14 +2895,15 @@ class RandomizeVisitor final : public VNVisitor {
         clearp->dtypeSetVoid();
         return clearp->makeStmt();
     }
-    
+
     // Generate solver calls for multiple solve groups
     // Returns statements to add to randomize() and the final result expression
-    void generateSolveGroupCalls(AstFunc* randomizep, FileLine* fl, AstVar* genp, 
+    void generateSolveGroupCalls(AstClass* classp, AstFunc* randomizep, FileLine* fl, AstVar* genp,
+                                 AstVar* randModeVarp,
                                  const std::vector<std::vector<AstVar*>>& solveGroups,
                                  AstNodeExpr*& resultExprp) {
         AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
-        
+
         if (solveGroups.empty()) {
             // No solve-before constraints, generate single call
             AstCExpr* const solverCallp = new AstCExpr{fl};
@@ -2731,7 +2913,7 @@ class RandomizeVisitor final : public VNVisitor {
             resultExprp = solverCallp;
             return;
         }
-        
+
         // Multiple groups detected: generate sequential solving
         UINFO(3, "Generating multi-group solve for " << solveGroups.size() << " groups\n");
         for (size_t i = 0; i < solveGroups.size(); ++i) {
@@ -2741,7 +2923,7 @@ class RandomizeVisitor final : public VNVisitor {
             }
             UINFO(3, "\n");
         }
-        
+
         // Create a map of which group each variable belongs to
         std::map<AstVar*, size_t> varToGroup;
         for (size_t i = 0; i < solveGroups.size(); ++i) {
@@ -2749,7 +2931,7 @@ class RandomizeVisitor final : public VNVisitor {
                 varToGroup[varp] = i;
             }
         }
-        
+
         // Single-group optimization: use standard approach
         if (solveGroups.size() == 1) {
             AstCExpr* const solverCallp = new AstCExpr{fl};
@@ -2759,10 +2941,11 @@ class RandomizeVisitor final : public VNVisitor {
             resultExprp = solverCallp;
             return;
         }
-        
+
         // Multi-group solve: generate sequential solver calls with constraint clearing
+        std::set<AstVar*> solvedVars;
         AstNodeExpr* lastResultp = nullptr;
-        
+
         for (size_t groupIdx = 0; groupIdx < solveGroups.size(); ++groupIdx) {
             // Add comment about this group
             std::string comment = "Solve group " + std::to_string(groupIdx) + ": ";
@@ -2771,40 +2954,55 @@ class RandomizeVisitor final : public VNVisitor {
             }
             AstComment* commentp = new AstComment{fl, comment};
             randomizep->addStmtsp(commentp);
-            
-            if (groupIdx > 0) {
-                // Clear constraints for subsequent groups
-                // Variables remain registered, but constraints are cleared
-                AstCMethodHard* const clearp = new AstCMethodHard{
-                    fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
-                    VCMethod::RANDOMIZER_CLEARCONSTRAINTS};
-                clearp->dtypeSetVoid();
-                randomizep->addStmtsp(clearp->makeStmt());
-                
-                // TODO: Re-add constraints here with solved variables as constants
-                // This requires constraint re-generation infrastructure
-                AstComment* todoComment = new AstComment{
-                    fl, "TODO: Re-add constraints with previous groups as constants"};
-                randomizep->addStmtsp(todoComment);
+
+            // For ALL groups (including group 0), we need to clear and re-register
+            // to ensure only the variables in this group are active
+            AstCMethodHard* const clearp = new AstCMethodHard{
+                fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_CLEARALL};
+            clearp->dtypeSetVoid();
+            randomizep->addStmtsp(clearp->makeStmt());
+
+            // Get the variables in this group
+            std::set<AstVar*> groupVars(solveGroups[groupIdx].begin(), solveGroups[groupIdx].end());
+
+            AstTask* const setupTaskp = getCreateConstraintSetupFuncForGroup(
+                classp, groupIdx, genp, randModeVarp, solvedVars, groupVars);
+            if (setupTaskp) {
+                AstTaskRef* const setupTaskRefp = new AstTaskRef{fl, setupTaskp, nullptr};
+                setupTaskRefp->classOrPackagep(classp);
+                randomizep->addStmtsp(setupTaskRefp->makeStmt());
             }
-            
-            // Call next() to solve this group
+
+            // Call next() immediately to solve this group
             AstCExpr* const solverCallp = new AstCExpr{fl};
             solverCallp->dtypeSetBit();
             solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
             solverCallp->add(".next(__Vm_rng)");
-            
+
+            // Create a temporary variable to store this group's result
+            const std::string tmpName = "__Vgroup" + std::to_string(groupIdx) + "_result";
+            AstVar* const tmpVarp = new AstVar{fl, VVarType::BLOCKTEMP, tmpName,
+                                              randomizep->findBitDType()};
+            tmpVarp->funcLocal(true);
+            randomizep->addStmtsp(tmpVarp);
+            AstVarRef* const tmpRefp = new AstVarRef{fl, tmpVarp, VAccess::WRITE};
+            randomizep->addStmtsp(new AstAssign{fl, tmpRefp, solverCallp});
+
+            // AND this result with previous results
+            AstVarRef* const tmpReadp = new AstVarRef{fl, tmpVarp, VAccess::READ};
             if (groupIdx == 0) {
-                lastResultp = solverCallp;
+                lastResultp = tmpReadp;
             } else {
-                // AND together results from all groups
-                lastResultp = new AstAnd{fl, lastResultp, solverCallp};
+                lastResultp = new AstAnd{fl, lastResultp, tmpReadp};
             }
+
+            for (AstVar* varp : solveGroups[groupIdx]) solvedVars.insert(varp);
         }
-        
+
         resultExprp = lastResultp;
     }
-    
+
     AstVar* getVarFromRef(AstNodeExpr* const exprp) {
         if (AstMemberSel* const memberSelp = VN_CAST(exprp, MemberSel)) {
             return memberSelp->varp();
@@ -3142,6 +3340,28 @@ class RandomizeVisitor final : public VNVisitor {
         AstNodeExpr* beginValp = nullptr;
         AstVar* genp = getRandomGenerator(nodep);
         if (genp) {
+            // First pass: Clone constraint templates BEFORE processing
+            // But exclude AstConstraintBefore nodes (they're ordering directives, not constraints)
+            nodep->foreachMember([&](AstClass* const classp, AstConstraint* const constrp) {
+                if (constrp->itemsp()) {
+                    // Clone and filter out ConstraintBefore nodes
+                    AstNode* templatep = nullptr;
+                    AstNode* lastTemplatep = nullptr;
+                    for (AstNode* itemp = constrp->itemsp(); itemp; itemp = itemp->nextp()) {
+                        if (!VN_IS(itemp, ConstraintBefore)) {
+                            AstNode* cloned = itemp->cloneTree(true);  // Deep clone
+                            if (lastTemplatep) {
+                                lastTemplatep = lastTemplatep->addNext(cloned);
+                            } else {
+                                templatep = lastTemplatep = cloned;
+                            }
+                        }
+                    }
+                    m_constraintTemplates[nodep].push_back({constrp, templatep});
+                }
+            });
+
+            // Second pass: Process constraints normally
             nodep->foreachMember([&](AstClass* const classp, AstConstraint* const constrp) {
                 AstTask* taskp = VN_AS(constrp->user2p(), Task);
                 if (!taskp) {
@@ -3201,9 +3421,6 @@ class RandomizeVisitor final : public VNVisitor {
                 }
             }
             randomizep->addStmtsp(implementConstraintsClear(fl, genp));
-            AstTask* setupAllTaskp = getCreateConstraintSetupFunc(nodep);
-            AstTaskRef* const setupTaskRefp = new AstTaskRef{fl, setupAllTaskp, nullptr};
-            randomizep->addStmtsp(setupTaskRefp->makeStmt());
 
             // Compute solve order groups from collected solve-before constraints
             const SolveOrderGraph& solveGraph = m_classSolveGraphs[nodep];
@@ -3211,16 +3428,25 @@ class RandomizeVisitor final : public VNVisitor {
             if (!solveGraph.isEmpty()) {
                 solveGroups = solveGraph.computeSolveGroups(fl);
                 if (!solveGroups.empty()) {
-                    UINFO(4, "Class " << nodep->name() << " has " << solveGroups.size() 
+                    UINFO(4, "Class " << nodep->name() << " has " << solveGroups.size()
                           << " solve groups\n");
                 }
+            }
+
+            // Only call the setup-all task if we DON'T have solve groups
+            // (solve groups handle constraint setup themselves)
+            if (solveGroups.empty()) {
+                AstTask* setupAllTaskp = getCreateConstraintSetupFunc(nodep);
+                AstTaskRef* const setupTaskRefp = new AstTaskRef{fl, setupAllTaskp, nullptr};
+                randomizep->addStmtsp(setupTaskRefp->makeStmt());
             }
 
             AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
 
             // Generate solver call(s) based on solve groups
-            generateSolveGroupCalls(randomizep, fl, genp, solveGroups, beginValp);
-            
+            generateSolveGroupCalls(VN_AS(m_modp, Class), randomizep, fl, genp, randModeVarp,
+                                    solveGroups, beginValp);
+
             if (randModeVarp) {
                 AstNodeModule* const randModeClassp = VN_AS(randModeVarp->user2p(), Class);
                 AstNodeFTask* const newp

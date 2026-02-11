@@ -66,6 +66,61 @@ static constexpr const char* GLOBAL_CONSTRAINT_SEPARATOR = "__DT__";
 static constexpr const char* BASIC_RANDOMIZE_FUNC_NAME = "__VBasicRand";
 
 // ######################################################################
+// Solve-before constraint dependency tracking
+
+struct SolveBeforeInfo final {
+    // A single solve-before constraint: solve lhs before rhs
+    AstVar* lhsp;  // Variable that should be solved first
+    AstVar* rhsp;  // Variable that depends on lhs
+    AstConstraintBefore* nodep;  // Original AST node for error reporting
+
+    SolveBeforeInfo(AstVar* lhs, AstVar* rhs, AstConstraintBefore* node)
+        : lhsp{lhs}, rhsp{rhs}, nodep{node} {}
+};
+
+class SolveOrderGraph final {
+    // Graph structure to track solve-before dependencies
+    // Nodes are variables, edges represent "must solve before" relationships
+private:
+    std::map<AstVar*, std::set<AstVar*>> m_successors;  // var -> vars that depend on it
+    std::map<AstVar*, std::set<AstVar*>> m_predecessors;  // var -> vars it depends on
+    std::vector<SolveBeforeInfo> m_constraints;  // All constraints for error reporting
+
+public:
+    void addEdge(AstVar* from, AstVar* to, AstConstraintBefore* nodep) {
+        m_successors[from].insert(to);
+        m_predecessors[to].insert(from);
+        m_constraints.emplace_back(from, to, nodep);
+    }
+
+    const std::set<AstVar*>& getPredecessors(AstVar* varp) const {
+        static const std::set<AstVar*> empty;
+        const auto it = m_predecessors.find(varp);
+        return it != m_predecessors.end() ? it->second : empty;
+    }
+
+    const std::set<AstVar*>& getSuccessors(AstVar* varp) const {
+        static const std::set<AstVar*> empty;
+        const auto it = m_successors.find(varp);
+        return it != m_successors.end() ? it->second : empty;
+    }
+
+    const std::vector<SolveBeforeInfo>& getConstraints() const { return m_constraints; }
+
+    bool isEmpty() const { return m_constraints.empty(); }
+
+    // Get all variables that have dependencies
+    std::set<AstVar*> getAllVars() const {
+        std::set<AstVar*> result;
+        for (const auto& pair : m_successors) {
+            result.insert(pair.first);
+            result.insert(pair.second.begin(), pair.second.end());
+        }
+        return result;
+    }
+};
+
+// ######################################################################
 // Establishes the target of a rand_mode() call
 
 struct RandModeTarget final {
@@ -725,6 +780,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                                // (used to format "%@.%@" for struct arrays)
     std::set<std::string>& m_writtenVars;  // Track which variable paths have write_var generated
                                            // (shared across all constraints)
+    SolveOrderGraph* m_solveGraphp;  // Optional: collect solve-before dependencies
 
     // Build full path for a MemberSel chain (e.g., "obj.l2.l3.l4")
     std::string buildMemberPath(const AstMemberSel* const memberSelp) {
@@ -1478,7 +1534,47 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
     }
     void visit(AstConstraintBefore* nodep) override {
-        nodep->v3warn(CONSTRAINTIGN, "Constraint expression ignored (imperfect distribution)");
+        // Collect solve-before dependencies for later processing
+        // For now, we only support simple variable references (not array indices, etc.)
+
+        // Extract variables from LHS (these should be solved first)
+        std::vector<AstVar*> lhsVars;
+        for (AstNodeExpr* lhsp = nodep->lhssp(); lhsp; lhsp = VN_AS(lhsp->nextp(), NodeExpr)) {
+            if (AstVarRef* const varrefp = VN_CAST(lhsp, VarRef)) {
+                lhsVars.push_back(varrefp->varp());
+            } else {
+                // Complex expression (e.g., a[i], obj.member) - not supported in Phase 1
+                nodep->v3warn(CONSTRAINTIGN,
+                             "Unsupported: solve-before with complex expressions (only simple variables supported currently)");
+                VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+                return;
+            }
+        }
+
+        // Extract variables from RHS (these depend on LHS)
+        std::vector<AstVar*> rhsVars;
+        for (AstNodeExpr* rhsp = nodep->rhssp(); rhsp; rhsp = VN_AS(rhsp->nextp(), NodeExpr)) {
+            if (AstVarRef* const varrefp = VN_CAST(rhsp, VarRef)) {
+                rhsVars.push_back(varrefp->varp());
+            } else {
+                // Complex expression - not supported in Phase 1
+                nodep->v3warn(CONSTRAINTIGN,
+                             "Unsupported: solve-before with complex expressions (only simple variables supported currently)");
+                VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+                return;
+            }
+        }
+
+        // Add edges to the solve order graph
+        if (m_solveGraphp) {
+            for (AstVar* lhsVar : lhsVars) {
+                for (AstVar* rhsVar : rhsVars) {
+                    m_solveGraphp->addEdge(lhsVar, rhsVar, nodep);
+                }
+            }
+        }
+
+        // Remove the constraint node from the AST (it's been processed)
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
     }
     void visit(AstConstraintUnique* nodep) override {
@@ -1684,13 +1780,15 @@ public:
     // CONSTRUCTORS
     explicit ConstraintExprVisitor(AstClass* classp, VMemberMap& memberMap, AstNode* nodep,
                                    AstNodeFTask* inlineInitTaskp, AstVar* genp,
-                                   AstVar* randModeVarp, std::set<std::string>& writtenVars)
+                                   AstVar* randModeVarp, std::set<std::string>& writtenVars,
+                                   SolveOrderGraph* solveGraphp = nullptr)
         : m_classp{classp}
         , m_inlineInitTaskp{inlineInitTaskp}
         , m_genp{genp}
         , m_randModeVarp{randModeVarp}
         , m_memberMap{memberMap}
-        , m_writtenVars{writtenVars} {
+        , m_writtenVars{writtenVars}
+        , m_solveGraphp{solveGraphp} {
         iterateAndNextNull(nodep);
     }
 };
@@ -1979,6 +2077,7 @@ class RandomizeVisitor final : public VNVisitor {
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     std::map<AstClass*, AstVar*>
         m_staticConstraintModeVars;  // Static constraint mode vars per class
+    std::map<AstClass*, SolveOrderGraph> m_classSolveGraphs;  // Solve-before info per class
 
     // METHODS
     // Check if two nodes are semantically equivalent (not pointer equality):
@@ -2916,8 +3015,11 @@ class RandomizeVisitor final : public VNVisitor {
                     resizeAllTaskp->addStmtsp(resizeTaskRefp->makeStmt());
                 }
 
-                ConstraintExprVisitor{classp, m_memberMap,  constrp->itemsp(), nullptr,
-                                      genp,   randModeVarp, m_writtenVars};
+                // Get or create solve graph for this class
+                SolveOrderGraph& solveGraph = m_classSolveGraphs[nodep];
+
+                ConstraintExprVisitor{classp,      m_memberMap,  constrp->itemsp(), nullptr,
+                                      genp,        randModeVarp, m_writtenVars,    &solveGraph};
                 if (constrp->itemsp()) {
                     taskp->addStmtsp(wrapIfConstraintMode(
                         nodep, constrp, constrp->itemsp()->unlinkFrBackWithNext()));

@@ -2138,8 +2138,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                         : VN_AS(m_genp->user2p(), NodeModule);
                 arrVarp->user3(true);
 
-                cstmtp->add("{\nchar __Vn[128];\nVL_SNPRINTF(__Vn, sizeof(__Vn), \""
-                            + smtArrayName + "_%x\", (unsigned)");
+                cstmtp->add("{\nchar __Vn[128];\nVL_SNPRINTF(__Vn, sizeof(__Vn), \"" + smtArrayName
+                            + "_%x\", (unsigned)");
                 cstmtp->add(new AstVarRef{fl, loopVarp, VAccess::READ});
                 cstmtp->add(");\n");
                 cstmtp->add(new AstVarRef{fl, classModulep, m_genp, VAccess::READWRITE});
@@ -2174,8 +2174,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                 cexprp->dtypeSetString();
                 cexprp->add("([&]{\nstd::string ret;\n");
                 cexprp->add(new AstBegin{fl, "", new AstForeach{fl, headerp, cstmtp}, true});
-                cexprp->add(std::string("return ret.empty() ? \"") + identity + "\" : \"("
-                            + smtOp + "\" + ret + \")\";\n})()");
+                cexprp->add(std::string("return ret.empty() ? \"") + identity + "\" : \"(" + smtOp
+                            + "\" + ret + \")\";\n})()");
                 nodep->replaceWith(new AstSFormatF{fl, "%@", false, cexprp});
             }
             VL_DO_DANGLING(nodep->deleteTree(), nodep);

@@ -2139,27 +2139,21 @@ class ConstraintExprVisitor final : public VNVisitor {
                 arrVarp->user3(true);
 
                 // Create variable name using AstSFormatF
-                AstSFormatF* const varNamep
-                    = new AstSFormatF{fl, smtArrayName + "_%x", false,
-                                      new AstVarRef{fl, loopVarp, VAccess::READ}};
+                AstSFormatF* const varNamep = new AstSFormatF{
+                    fl, smtArrayName + "_%x", false, new AstVarRef{fl, loopVarp, VAccess::READ}};
 
                 // Create array element reference: array.atWrite(index)
-                AstCMethodHard* const atWritep
-                    = new AstCMethodHard{fl,
-                                         new AstVarRef{fl, classModulep, arrVarp,
-                                                       VAccess::READWRITE},
-                                         VCMethod::ARRAY_AT_WRITE,
-                                         new AstVarRef{fl, loopVarp, VAccess::READ}};
+                AstCMethodHard* const atWritep = new AstCMethodHard{
+                    fl, new AstVarRef{fl, classModulep, arrVarp, VAccess::READWRITE},
+                    VCMethod::ARRAY_AT_WRITE, new AstVarRef{fl, loopVarp, VAccess::READ}};
                 atWritep->dtypeFrom(elemDtp);
 
                 // Create write_var method call: gen.write_var(arrElement, width, name, 0)
-                AstCMethodHard* const writeVarp
-                    = new AstCMethodHard{fl,
-                                         new AstVarRef{fl, classModulep, m_genp,
-                                                       VAccess::READWRITE},
-                                         VCMethod::RANDOMIZER_WRITE_VAR, atWritep};
-                writeVarp->addPinsp(
-                    new AstConst{fl, AstConst::WidthedValue{}, 64, static_cast<uint32_t>(elemWidth)});
+                AstCMethodHard* const writeVarp = new AstCMethodHard{
+                    fl, new AstVarRef{fl, classModulep, m_genp, VAccess::READWRITE},
+                    VCMethod::RANDOMIZER_WRITE_VAR, atWritep};
+                writeVarp->addPinsp(new AstConst{fl, AstConst::WidthedValue{}, 64,
+                                                 static_cast<uint32_t>(elemWidth)});
                 writeVarp->addPinsp(varNamep->cloneTree(false));
                 writeVarp->addPinsp(new AstConst{fl, AstConst::WidthedValue{}, 64, 0});
                 writeVarp->dtypeSetVoid();

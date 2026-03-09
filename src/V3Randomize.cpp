@@ -738,6 +738,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                                // (used to format "%@.%@" for struct arrays)
     std::set<std::string>& m_writtenVars;  // Track which variable paths have write_var generated
                                            // (shared across all constraints)
+    int m_constraintIfDepth = 0;  // Track nesting depth inside ConstraintIf nodes
 
     // Build full path for a MemberSel chain (e.g., "obj.l2.l3.l4")
     std::string buildMemberPath(const AstMemberSel* const memberSelp) {
@@ -1543,12 +1544,53 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (editFormat(nodep)) return;
         VNRelinker handle;
         FileLine* const fl = nodep->fileline();
-        AstNodeExpr* const msbp = new AstSFormatF{
-            fl, "%1d", false,
-            new AstAdd{fl, nodep->lsbp()->cloneTreePure(false),
-                       new AstConst{fl, static_cast<uint32_t>(nodep->widthConst() - 1)}}};
-        AstNodeExpr* const lsbp
-            = new AstSFormatF{fl, "%1d", false, nodep->lsbp()->unlinkFrBack(&handle)};
+
+        // Get the width of the operand being selected from
+        const int fromWidth = nodep->fromp()->width();
+        const uint32_t selWidth = nodep->widthConst();
+
+        // Extract the LSB expression
+        AstNodeExpr* lsbExpr = nodep->lsbp()->unlinkFrBack(&handle);
+
+        // Warn and clamp for dynamic bit indexing which may cause out-of-bounds access
+        // Suppress warning if inside ConstraintIf, as user may have added bounds checking
+        if (!VN_IS(lsbExpr, Const)) {
+            if (m_constraintIfDepth == 0) {
+                nodep->v3warn(CONSTRAINTIGN,
+                             "Dynamic bit indexing in constraint may exceed array bounds.\n"
+                             << nodep->warnMore()
+                             << "... Recommend adding explicit bounds check in constraint, "
+                             << "e.g., 'if (i < size-1) vec[i+1] ...'\n"
+                             << nodep->warnMore()
+                             << "... Applying bounds clamping to prevent SMT solver errors.");
+            }
+
+            // Clamp LSB to valid range to prevent SMT solver crashes
+            // This is defensive: even if logically unreachable, SMT formulas must be valid
+            lsbExpr = new AstCond{
+                fl,
+                new AstGte{fl, lsbExpr->cloneTreePure(false),
+                          new AstConst{fl, static_cast<uint32_t>(fromWidth)}},
+                new AstConst{fl, static_cast<uint32_t>(fromWidth - 1)},
+                lsbExpr};
+        }
+
+        // Calculate MSB = LSB + selWidth - 1
+        AstNodeExpr* msbExpr = new AstAdd{fl, lsbExpr->cloneTreePure(false),
+                                          new AstConst{fl, selWidth - 1}};
+
+        // Also clamp MSB if needed
+        if (!VN_IS(nodep->lsbp(), Const)) {
+            msbExpr = new AstCond{
+                fl,
+                new AstGte{fl, msbExpr->cloneTreePure(false),
+                          new AstConst{fl, static_cast<uint32_t>(fromWidth)}},
+                new AstConst{fl, static_cast<uint32_t>(fromWidth - 1)},
+                msbExpr};
+        }
+
+        AstNodeExpr* const msbp = new AstSFormatF{fl, "%1d", false, msbExpr};
+        AstNodeExpr* const lsbp = new AstSFormatF{fl, "%1d", false, lsbExpr};
         handle.relink(lsbp);
 
         editSMT(nodep, nodep->fromp(), lsbp, msbp);
@@ -1785,8 +1827,11 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstConstraintIf* nodep) override {
         AstNodeExpr* newp = nullptr;
         FileLine* const fl = nodep->fileline();
+        // Track that we're inside a ConstraintIf to suppress false positive warnings
+        ++m_constraintIfDepth;
         AstNodeExpr* const thenp = editSingle(fl, nodep->thensp());
         AstNodeExpr* const elsep = editSingle(fl, nodep->elsesp());
+        --m_constraintIfDepth;
         if (thenp && elsep) {
             newp = new AstCond{fl, nodep->condp()->unlinkFrBack(), thenp, elsep};
         } else if (thenp) {

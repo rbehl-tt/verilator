@@ -1557,36 +1557,32 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (!VN_IS(lsbExpr, Const)) {
             if (m_constraintIfDepth == 0) {
                 nodep->v3warn(CONSTRAINTIGN,
-                             "Dynamic bit indexing in constraint may exceed array bounds.\n"
-                             << nodep->warnMore()
-                             << "... Recommend adding explicit bounds check in constraint, "
-                             << "e.g., 'if (i < size-1) vec[i+1] ...'\n"
-                             << nodep->warnMore()
-                             << "... Applying bounds clamping to prevent SMT solver errors.");
+                              "Dynamic bit indexing in constraint may exceed array bounds.\n"
+                                  << nodep->warnMore()
+                                  << "... Recommend adding explicit bounds check in constraint, "
+                                  << "e.g., 'if (i < size-1) vec[i+1] ...'\n"
+                                  << nodep->warnMore()
+                                  << "... Applying bounds clamping to prevent SMT solver errors.");
             }
 
             // Clamp LSB to valid range to prevent SMT solver crashes
             // This is defensive: even if logically unreachable, SMT formulas must be valid
-            lsbExpr = new AstCond{
-                fl,
-                new AstGte{fl, lsbExpr->cloneTreePure(false),
-                          new AstConst{fl, static_cast<uint32_t>(fromWidth)}},
-                new AstConst{fl, static_cast<uint32_t>(fromWidth - 1)},
-                lsbExpr};
+            lsbExpr = new AstCond{fl,
+                                  new AstGte{fl, lsbExpr->cloneTreePure(false),
+                                             new AstConst{fl, static_cast<uint32_t>(fromWidth)}},
+                                  new AstConst{fl, static_cast<uint32_t>(fromWidth - 1)}, lsbExpr};
         }
 
         // Calculate MSB = LSB + selWidth - 1
-        AstNodeExpr* msbExpr = new AstAdd{fl, lsbExpr->cloneTreePure(false),
-                                          new AstConst{fl, selWidth - 1}};
+        AstNodeExpr* msbExpr
+            = new AstAdd{fl, lsbExpr->cloneTreePure(false), new AstConst{fl, selWidth - 1}};
 
         // Also clamp MSB if needed
         if (!VN_IS(nodep->lsbp(), Const)) {
-            msbExpr = new AstCond{
-                fl,
-                new AstGte{fl, msbExpr->cloneTreePure(false),
-                          new AstConst{fl, static_cast<uint32_t>(fromWidth)}},
-                new AstConst{fl, static_cast<uint32_t>(fromWidth - 1)},
-                msbExpr};
+            msbExpr = new AstCond{fl,
+                                  new AstGte{fl, msbExpr->cloneTreePure(false),
+                                             new AstConst{fl, static_cast<uint32_t>(fromWidth)}},
+                                  new AstConst{fl, static_cast<uint32_t>(fromWidth - 1)}, msbExpr};
         }
 
         AstNodeExpr* const msbp = new AstSFormatF{fl, "%1d", false, msbExpr};

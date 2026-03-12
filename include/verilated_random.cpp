@@ -22,6 +22,7 @@
 //=========================================================================
 
 #include "verilated_random.h"
+#include "verilated_solver_log.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -448,7 +449,7 @@ void VlRandomizer::enumerateRandcValues(const std::string& varName, VlRNG& rngr)
     m_randcValueQueues[varName] = std::deque<uint64_t>(values.begin(), values.end());
 }
 
-bool VlRandomizer::next(VlRNG& rngr) {
+bool VlRandomizer::next(VlRNG& rngr, VlSolverLog* logp) {
     if (m_vars.empty() && m_unique_arrays.empty()) return true;
     for (const std::string& baseName : m_unique_arrays) {
         const auto it = m_vars.find(baseName);
@@ -491,7 +492,7 @@ bool VlRandomizer::next(VlRNG& rngr) {
     }
 
     // If solve-before constraints are present, use phased solving
-    if (!m_solveBefore.empty()) return nextPhased(rngr);
+    if (!m_solveBefore.empty()) return nextPhased(rngr, logp);
 
     std::iostream& os = getSolver();
     if (!os) return false;
@@ -499,28 +500,46 @@ bool VlRandomizer::next(VlRNG& rngr) {
     // Soft constraint relaxation (IEEE 1800-2017 18.5.13, last-wins priority):
     // Try hard + soft[0..N-1], then hard + soft[1..N-1], ..., then hard only.
     // First SAT phase wins. If hard-only is UNSAT, report via unsat-core.
-    os << "(set-option :produce-models true)\n";
-    os << "(set-logic QF_ABV)\n";
-    os << "(define-fun __Vbv ((b Bool)) (_ BitVec 1) (ite b #b1 #b0))\n";
-    os << "(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))\n";
+    const std::string cmd1 = "(set-option :produce-models true)";
+    const std::string cmd2 = "(set-logic QF_ABV)";
+    const std::string cmd3 = "(define-fun __Vbv ((b Bool)) (_ BitVec 1) (ite b #b1 #b0))";
+    const std::string cmd4 = "(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))";
+    if (logp) {
+        logp->logCommand(cmd1);
+        logp->logCommand(cmd2);
+        logp->logCommand(cmd3);
+        logp->logCommand(cmd4);
+    }
+    os << cmd1 << "\n";
+    os << cmd2 << "\n";
+    os << cmd3 << "\n";
+    os << cmd4 << "\n";
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) {
             auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
             var.second->setArrayInfo(arrVarsp);
         }
-        os << "(declare-fun " << var.first << " () ";
-        var.second->emitType(os);
-        os << ")\n";
+        std::ostringstream decl;
+        decl << "(declare-fun " << var.first << " () ";
+        var.second->emitType(decl);
+        decl << ")";
+        if (logp) logp->logCommand(decl.str());
+        os << decl.str() << "\n";
     }
 
     for (const std::string& constraint : m_constraints) {
-        os << "(assert (= #b1 " << constraint << "))\n";
+        const std::string assertCmd = "(assert (= #b1 " + constraint + "))";
+        if (logp) logp->logCommand(assertCmd);
+        os << assertCmd << "\n";
     }
 
     // Pin randc values from pre-enumerated queues
     for (const auto& pair : randcPinned) {
         const int w = m_vars.at(pair.first)->width();
-        os << "(assert (= " << pair.first << " (_ bv" << pair.second << " " << w << ")))\n";
+        std::ostringstream pinCmd;
+        pinCmd << "(assert (= " << pair.first << " (_ bv" << pair.second << " " << w << ")))";
+        if (logp) logp->logCommand(pinCmd.str());
+        os << pinCmd.str() << "\n";
     }
 
     const size_t nSoft = m_softConstraints.size();
@@ -528,17 +547,33 @@ bool VlRandomizer::next(VlRNG& rngr) {
     for (size_t phase = 0; phase <= nSoft && !sat; ++phase) {
         const bool hasSoft = (phase < nSoft);
         if (hasSoft) {
+            if (logp) logp->logCommand("(push 1)");
             os << "(push 1)\n";
-            for (size_t i = phase; i < nSoft; ++i)
-                os << "(assert (= #b1 " << m_softConstraints[i] << "))\n";
+            for (size_t i = phase; i < nSoft; ++i) {
+                const std::string softAssert = "(assert (= #b1 " + m_softConstraints[i] + "))";
+                if (logp) logp->logCommand(softAssert);
+                os << softAssert << "\n";
+            }
         }
+        if (logp) logp->logCommand("(check-sat)");
         os << "(check-sat)\n";
         sat = parseSolution(os, /*log=*/phase == nSoft);
-        if (!sat && hasSoft) os << "(pop 1)\n";
+        if (logp) logp->logResponse(sat ? "sat" : "unsat");
+        if (!sat && hasSoft) {
+            if (logp) logp->logCommand("(pop 1)");
+            os << "(pop 1)\n";
+        }
     }
 
     if (!sat) {
         // If unsat, use named assertions to get unsat-core
+        if (logp) {
+            logp->logCommand("(reset)");
+            logp->logCommand("(set-option :produce-unsat-cores true)");
+            logp->logCommand("(set-logic QF_ABV)");
+            logp->logCommand("(define-fun __Vbv ((b Bool)) (_ BitVec 1) (ite b #b1 #b0))");
+            logp->logCommand("(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))");
+        }
         os << "(reset)\n";
         os << "(set-option :produce-unsat-cores true)\n";
         os << "(set-logic QF_ABV)\n";
@@ -777,7 +812,7 @@ void VlRandomizer::solveBefore(const char* beforeName, const char* afterName) {
     m_solveBefore.emplace_back(std::string(beforeName), std::string(afterName));
 }
 
-bool VlRandomizer::nextPhased(VlRNG& rngr) {
+bool VlRandomizer::nextPhased(VlRNG& rngr, VlSolverLog* logp) {
     // Phased solving for solve...before constraints.
     // Variables are solved in layers determined by topological sort of the
     // solve-before dependency graph. Each layer is solved with ALL constraints
@@ -837,7 +872,7 @@ bool VlRandomizer::nextPhased(VlRNG& rngr) {
         // Clear solve_before temporarily and call normal next()
         const auto saved = std::move(m_solveBefore);
         m_solveBefore.clear();
-        const bool result = next(rngr);
+        const bool result = next(rngr, logp);
         m_solveBefore = std::move(saved);
         return result;
     }
@@ -852,10 +887,20 @@ bool VlRandomizer::nextPhased(VlRNG& rngr) {
         if (!os) return false;
 
         // Solver session setup
-        os << "(set-option :produce-models true)\n";
-        os << "(set-logic QF_ABV)\n";
-        os << "(define-fun __Vbv ((b Bool)) (_ BitVec 1) (ite b #b1 #b0))\n";
-        os << "(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))\n";
+        const std::string cmd1 = "(set-option :produce-models true)";
+        const std::string cmd2 = "(set-logic QF_ABV)";
+        const std::string cmd3 = "(define-fun __Vbv ((b Bool)) (_ BitVec 1) (ite b #b1 #b0))";
+        const std::string cmd4 = "(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))";
+        if (logp) {
+            logp->logCommand(cmd1);
+            logp->logCommand(cmd2);
+            logp->logCommand(cmd3);
+            logp->logCommand(cmd4);
+        }
+        os << cmd1 << "\n";
+        os << cmd2 << "\n";
+        os << cmd3 << "\n";
+        os << cmd4 << "\n";
 
         // Declare ALL variables
         for (const auto& var : m_vars) {
@@ -863,22 +908,30 @@ bool VlRandomizer::nextPhased(VlRNG& rngr) {
                 auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
                 var.second->setArrayInfo(arrVarsp);
             }
-            os << "(declare-fun " << var.first << " () ";
-            var.second->emitType(os);
-            os << ")\n";
+            std::ostringstream decl;
+            decl << "(declare-fun " << var.first << " () ";
+            var.second->emitType(decl);
+            decl << ")";
+            if (logp) logp->logCommand(decl.str());
+            os << decl.str() << "\n";
         }
 
         // Pin all previously solved variables
         for (const auto& entry : solvedValues) {
-            os << "(assert (= " << entry.first << " " << entry.second << "))\n";
+            const std::string pinCmd = "(assert (= " + entry.first + " " + entry.second + "))";
+            if (logp) logp->logCommand(pinCmd);
+            os << pinCmd << "\n";
         }
 
         // Assert ALL constraints
         for (const std::string& constraint : m_constraints) {
-            os << "(assert (= #b1 " << constraint << "))\n";
+            const std::string assertCmd = "(assert (= #b1 " + constraint + "))";
+            if (logp) logp->logCommand(assertCmd);
+            os << assertCmd << "\n";
         }
 
         // Initial check-sat WITHOUT diversity (guaranteed sat if constraints are consistent)
+        if (logp) logp->logCommand("(check-sat)");
         os << "(check-sat)\n";
 
         if (isFinalPhase) {

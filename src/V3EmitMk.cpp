@@ -685,6 +685,10 @@ public:
         if (v3Global.useRandomizeMethods() && solver != "")
             of.puts("\t-DVM_SOLVER_DEFAULT='\"" + V3OutFormatter::quoteNameControls(solver)
                     + "\"' \\\n");
+        const std::string solverLog = v3Global.opt.solverLogFile();
+        if (v3Global.useRandomizeMethods() && !solverLog.empty())
+            of.puts("\t-DVM_SOLVER_LOGFILE='\"" + V3OutFormatter::quoteNameControls(solverLog)
+                    + "\"' \\\n");
         if (!v3Global.opt.libCreate().empty()) of.puts("\t-fPIC \\\n");
         const VStringList& cFlags = v3Global.opt.cFlags();
         for (const string& i : cFlags) of.puts("  " + i + " \\\n");

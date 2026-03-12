@@ -1649,6 +1649,19 @@ Summary:
    dates. By default, this option is enabled for :vlopt:`--cc` or
    :vlopt:`--sc` modes only.
 
+.. option:: --solver-logfile <filename>
+
+   Enables logging of all SMT solver interactions during constraint
+   randomization to the specified file in SMT-LIB2 format. This is useful for
+   debugging constraint solving issues, understanding why certain constraints
+   fail, or replaying solver sessions offline. The log includes all commands
+   sent to the solver (variable declarations, constraint assertions, check-sat
+   commands) and responses received (sat/unsat results).
+
+   The generated log can be replayed directly with SMT solvers like Z3 for
+   analysis. Each ``randomize()`` call generates a complete solver session in
+   the log.
+
 .. option:: --stats
 
    Creates a dump file with statistics on the design in

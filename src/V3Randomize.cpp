@@ -3335,6 +3335,29 @@ class RandomizeVisitor final : public VNVisitor {
             funcp->addStmtsp(callp->makeStmt());
         }
     }
+    // Create a solver call expression with optional comprehensive logging
+    AstNodeExpr* createSolverCall(FileLine* fl, AstNodeModule* genModp, AstVar* genp) {
+        // Create a solver call that passes VlSolverLog to enable comprehensive logging
+        // of all solver interactions (declarations, constraints, check-sat, responses)
+        AstCExpr* const callp = new AstCExpr{fl};
+        callp->dtypeSetBit();
+
+        // Use lambda to manage VlSolverLog lifetime and pass it to next()
+        callp->add("([&](){\n");
+        callp->add("#ifdef VM_SOLVER_LOGFILE\n");
+        callp->add("VlSolverLog __Vlog(VM_SOLVER_LOGFILE);\n");
+        callp->add("return ");
+        callp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
+        callp->add(".next(__Vm_rng, &__Vlog);\n");
+        callp->add("#else\n");
+        callp->add("return ");
+        callp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
+        callp->add(".next(__Vm_rng);\n");
+        callp->add("#endif\n");
+        callp->add("})()");
+
+        return callp;
+    }
     // Check if a class (including inherited members) has any rand class-type members
     bool classHasRandClassMembers(AstClass* classp) {
         return classp->existsMember([](const AstClass*, const AstVar* varp) {
@@ -4129,10 +4152,9 @@ class RandomizeVisitor final : public VNVisitor {
 
             AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
 
-            AstCExpr* const solverCallp = new AstCExpr{fl};
-            solverCallp->dtypeSetBit();
-            solverCallp->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
-            solverCallp->add(".next(__Vm_rng)");
+            // Create solver call with logging support
+            AstNodeExpr* const solverCallp = createSolverCall(fl, genModp, genp);
+
             const auto sizeArraysIt = m_sizeConstrainedArrays.find(nodep);
             const bool needsSizePhase
                 = sizeArraysIt != m_sizeConstrainedArrays.end() && !sizeArraysIt->second.empty();
@@ -4221,10 +4243,7 @@ class RandomizeVisitor final : public VNVisitor {
                 }
 
                 // Final pass: solve full constraints with sizes pinned
-                AstCExpr* const solverCallp2 = new AstCExpr{fl};
-                solverCallp2->dtypeSetBit();
-                solverCallp2->add(new AstVarRef{fl, genModp, genp, VAccess::READWRITE});
-                solverCallp2->add(".next(__Vm_rng)");
+                AstNodeExpr* const solverCallp2 = createSolverCall(fl, genModp, genp);
                 randomizep->addStmtsp(new AstAssign{
                     fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE}, solverCallp2});
 

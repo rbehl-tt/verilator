@@ -36,6 +36,9 @@
 
 //=============================================================================
 
+// Forward declaration
+class VlSolverLog;
+
 // VlRandomExpr and subclasses represent expressions for the constraint solver.
 class ArrayInfo final {
 public:
@@ -231,7 +234,7 @@ class VlRandomizer VL_NOT_FINAL {
     bool parseSolution(std::iostream& file, bool log = false);
     void enumerateRandcValues(const std::string& varName, VlRNG& rngr);
     size_t hashConstraints() const;
-    bool nextPhased(VlRNG& rngr);  // Phased solving for solve...before
+    bool nextPhased(VlRNG& rngr, VlSolverLog* logp);  // Phased solving for solve...before
 
 public:
     // CONSTRUCTORS
@@ -240,7 +243,7 @@ public:
 
     // METHODS
     // Finds the next solution satisfying the constraints
-    bool next(VlRNG& rngr);
+    bool next(VlRNG& rngr, VlSolverLog* logp = nullptr);
 
     // ---  Process the key for associative array  ---
 

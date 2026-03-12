@@ -492,6 +492,7 @@ detailed descriptions of these arguments.
     --sc                        Create SystemC output
     --sched-zero-delay          Specify #0 delay support
     --no-skip-identical         Disable skipping identical output
+    --solver-logfile <filename> Enable logging of SMT solver interactions
     --stats                     Create statistics file
     --stats-vars                Provide statistics on variables
     --no-std                    Prevent loading standard files

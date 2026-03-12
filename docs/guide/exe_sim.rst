@@ -131,3 +131,4 @@ Options:
    not be displayed. Defaults to 0 (warnings enabled). This can also be
    controlled via the C++ API using
    ``Verilated::threadContextp()->warnUnsatConstr(false)``.
+   See also :vlopt:`--solver-logfile` for debugging constraint solving issues.

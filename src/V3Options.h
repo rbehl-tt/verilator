@@ -377,6 +377,7 @@ private:
     string      m_pipeFilter;   // main switch: --pipe-filter
     string      m_prefix;       // main switch: --prefix
     string      m_protectKey;   // main switch: --protect-key
+    string      m_solverLogFile;    // main switch: --solver-logfile
     string      m_topModule;    // main switch: --top-module
     string      m_unusedRegexp; // main switch: --unused-regexp
     string      m_waiverOutput;  // main switch: --waiver-output {filename}
@@ -677,6 +678,7 @@ public:
     string modPrefix() const VL_MT_SAFE { return m_modPrefix; }
     string pipeFilter() const { return m_pipeFilter; }
     string prefix() const VL_MT_SAFE { return m_prefix; }
+    string solverLogFile() const { return m_solverLogFile; }
     // Not just called protectKey() to avoid bugs of not using protectKeyDefaulted()
     bool protectKeyProvided() const { return !m_protectKey.empty(); }
     string protectKeyDefaulted() VL_MT_SAFE;  // Set default key if not set by user

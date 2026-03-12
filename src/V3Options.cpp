@@ -1717,6 +1717,7 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
     });
 
     DECL_OPTION("-savable", OnOff, &m_savable);
+    DECL_OPTION("-solver-logfile", Set, &m_solverLogFile);
     DECL_OPTION("-sc", CbCall, [this]() {
         m_outFormatOk = true;
         m_systemC = true;

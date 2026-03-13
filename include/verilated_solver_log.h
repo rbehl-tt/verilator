@@ -54,9 +54,7 @@ public:
 
     /// Destructor - closes logfile
     ~VlSolverLog() {
-        if (m_logFile && m_logFile->is_open()) {
-            m_logFile->close();
-        }
+        if (m_logFile && m_logFile->is_open()) { m_logFile->close(); }
     }
 
     /// Check if logging is enabled

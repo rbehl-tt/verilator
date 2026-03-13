@@ -22,6 +22,7 @@
 //=========================================================================
 
 #include "verilated_random.h"
+
 #include "verilated_solver_log.h"
 
 #include <algorithm>

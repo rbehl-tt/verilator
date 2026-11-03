@@ -1160,24 +1160,22 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
 
     // Nothing cached from a previous UG2 run, so refill the batch first.
     if (m_ug2.loThreshWitnesses.empty()) {
-        VlSolverTxn txn{sess};
-        if (!txn.ok()) return false;
-        std::iostream& solver = sess.os();
-
-        solver << "(set-option :produce-models true)\n";
-        solver << "(set-logic QF_ABV)\n";
-        emitDefines(solver);
-        emitDeclares(solver, false);
-        emitAsserts(solver, uniqueExprs, false);
-
         if (!m_ug2.paramsValid) {
             // Searches once per constraint set for how finely to cut the space, and
             // caches parameters
+            VlSolverTxn txn{sess};
+            if (!txn.ok()) return false;
+            emitUnigen2Problem(sess.os(), uniqueExprs);
             if (!estimateParameters(sess, rngr)) return false;
             m_ug2.paramsValid = true;
             m_ug2.lastSuccessI = -1;  // new params, so the old hint no longer applies
         }
 
+        // A new transaction, as the solver would steer the samples towards the
+        // solutions the search above enumerated
+        VlSolverTxn txn{sess};
+        if (!txn.ok()) return false;
+        emitUnigen2Problem(sess.os(), uniqueExprs);
         // generateSamples() always finds a candidate in practice
         if (VL_UNCOVERABLE(!generateSamples(sess, rngr))) return false;
     }
@@ -1187,6 +1185,15 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
     m_ug2.loThreshWitnesses.pop_back();
     writeBackWitness(witness);
     return true;
+}
+
+void VlRandomizer::emitUnigen2Problem(std::ostream& os,
+                                      const std::vector<std::string>& uniqueExprs) const {
+    os << "(set-option :produce-models true)\n";
+    os << "(set-logic QF_ABV)\n";
+    emitDefines(os);
+    emitDeclares(os, false);
+    emitAsserts(os, uniqueExprs, false);
 }
 
 void VlRandomizer::writeBackWitness(const Witness& witness) {
@@ -1357,11 +1364,19 @@ bool VlRandomizer::estimateParameters(VlSolverSession& sess, VlRNG& rngr)
     // time, so stop and just use fixed number of XORs. Limit set empirically from measured solve
     // times.
     const int iMax = totalBits < ug2HashBitsLargeSpace ? totalBits : ug2HashBitsLargeSpace;
+    const int bound = 61;
     std::vector<Witness> witnesses;  // Reused across trials; bsat() clears it
-    for (int i = 1; i <= iMax; ++i) {
+    // iMax XORs cut the smallest cell the search tries. If even that cell reaches the bound,
+    // every trial would be expected to as well, so skip the search.
+    solver << "(push 1)\n";
+    unigenXors(solver, rngr, iMax);
+    solCount = bsat(sess, bound, witnesses);
+    solver << "(pop 1)\n";
+    if (solCount < 0) return false;
+    const bool largeSpace = solCount >= bound;
+    for (int i = 1; !largeSpace && i <= iMax; ++i) {
         solver << "(push 1)\n";
         unigenXors(solver, rngr, i);
-        const int bound = 61;
         solCount = bsat(sess, bound, witnesses);
         if (solCount < 0) {
             solver << "(pop 1)\n";

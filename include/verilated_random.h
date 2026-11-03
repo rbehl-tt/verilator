@@ -318,6 +318,8 @@ class VlRandomizer VL_NOT_FINAL {
 
     // Sample one random solution. False if a sample couldn't be produced
     bool unigen2(VlRNG& rngr, VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
+    // Declare the variables and assert the constraints, for estimateParameters/generateSamples
+    void emitUnigen2Problem(std::ostream& os, const std::vector<std::string>& uniqueExprs) const;
     // Find out how finely to cut the solution space, and what cell size to accept
     bool estimateParameters(VlSolverSession& sess, VlRNG& rngr);
     // Collect up to `bound` different solutions of whatever is asserted right now.
